@@ -1,0 +1,119 @@
+---
+title: "Vizinhos_EM"
+author: "Fernando Lhamas"
+format: html
+editor: visual
+---
+
+```{r}
+# Rodar apenas se não tiver executado import_EM
+library(tidyverse)
+df3 <- read.csv2("~/Documents/Escolas_medicas/df3.csv", stringsAsFactors=TRUE)
+```
+
+### Tratamento dos vizinhos
+
+Por conta da possibilidade de ocorrer transbordamento (spillover) com os municípios vizinhos, vamos primeiro remover os vizinhos antes do pareamento, estimando um raio padrão de 100 km. A justificativa decorre da natureza das variáveis dependentes, que são desenvolvimento econômico e que naturalmente transbordam para as regiões vizinhas pelo aumento de transações comerciais, afetando o crescimento das empresas, níveis de emprego, PIB, entre outros aspectos de desenvolvimento.
+
+```{r}
+# Usando distância euclidiana
+coords_matrix_z <- df3 %>%
+  select(longitude_z, latitude_z) %>%
+  filter(!is.na(longitude_z), !is.na(latitude_z)) %>%
+  as.matrix()
+
+vizinhos_z <- spdep::dnearneigh(
+  coords_matrix_z,
+  d1 = 0,
+  d2 = 0.03,       # Limite em desvios-padrão
+  longlat = FALSE # Distância euclidiana
+)
+
+# Obter lista única dos códigos dos municípios tratados
+tratados <- df3 %>%
+  filter(EM == "Sim") %>%
+  distinct(ibge) %>%
+  pull(ibge)
+
+# Gerar lista dos tratados
+df_t <- df3 %>%
+  select(EM, mun, uf, ibge, latitude, longitude, longitude_z, latitude_z) %>%
+  filter(!is.na(longitude_z), !is.na(latitude_z)) %>%
+  filter(EM == "Sim") %>%
+  distinct(ibge, .keep_all = TRUE) %>%
+  mutate(indice = row_number())
+```
+
+Agora que já conhecemos os municípios tratados e guardamos os códigos de ibge deles, vamos identificar os vizinhos
+
+```{r}
+library(spdep)
+library(dplyr)
+
+# 1. Criar mapeamento de índices para ibge
+mapeamento <- df3 %>%
+  select(ibge, longitude_z, latitude_z) %>%
+  filter(!is.na(longitude_z), !is.na(latitude_z)) %>%
+  distinct(ibge, .keep_all = TRUE) %>%
+  mutate(indice = row_number())
+
+# 2. Encontrar índices dos tratados na matriz
+indices_tratados <- mapeamento %>% 
+  filter(ibge %in% tratados) %>%
+  pull(indice)
+
+# 3. Identificar vizinhos dos tratados
+indices_vizinhos <- unique(unlist(vizinhos_z[indices_tratados]))
+
+# 4. Obter ibge dos vizinhos (excluindo os próprios tratados)
+ntratados <- mapeamento %>%
+  filter(indice %in% indices_vizinhos & !(ibge %in% tratados)) %>%
+  pull(ibge)
+
+# 5. Criar df_v (base dos vizinhos similar a df_t)
+df_v <- df3 %>%
+  filter(ibge %in% ntratados) %>%
+  select(EM, mun, uf, ibge, latitude, longitude, longitude_z, latitude_z) %>%
+  distinct(ibge, .keep_all = TRUE) %>%
+  mutate(grupo = "Vizinho")
+```
+
+Obtemos 141 municípios vizinhos, baseado nos valores padronizados de latitude e longitude, a uma distância euclidiana de 0.03, cujos valores se aproximam de municípios que fazem fronteira com os municípios de tratamento.
+
+```{r}
+ggplot(df3 %>% filter(ibge %in% ntratados), aes(x = longitude, y = latitude)) +
+  geom_point(color = "blue", alpha = 0.5) +
+  geom_point(data = df_t, aes(x = longitude, y = latitude), color = "red") +
+  labs(title = "Municípios Tratados (Vermelho) e Vizinhos (Azul)")
+```
+
+No gráfico, podemos verificar que para todos os municípios tratados, removemos municipios próximos.
+
+Agora vamos incluir a variável `viz` que identifica os vizinhos.
+
+```{r}
+df4 <- df3 %>%
+  mutate(viz = if_else(ibge %in% ntratados, 1, 0))
+
+# Verificação
+table(df4$viz)/14
+table(df4$viz == "1", df4$EM)
+```
+
+Na verificação, devemos obter os 141 vizinhos. Na segunda verificação, observamos que nenhum tratado foi classificado incorretamente como vizinho.
+
+Vamos filtrar para utilizar somente os tratados e os não vizinhos, evitando assim o spillover.
+
+```{r}
+df5 <- df4 %>%
+  filter(EM == "Sim" | viz == 0)
+#Verificação
+table(df5$EM)
+```
+
+Obtemos então 5392 municípios não vizinhos e 37 tratados. Retiramos 141 vizinhos. A soma resulta em 5570, o número de municípios total.
+
+```{r}
+# Exportar com separador ;
+#write.csv2(df5, "df5.csv")
+```

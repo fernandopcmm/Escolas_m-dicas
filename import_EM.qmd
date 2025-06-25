@@ -1,0 +1,151 @@
+---
+title: "Import_EM"
+author: "Fernando Lhamas"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+base_em2 <- read.csv("~/Documents/Escolas_medicas/base_em2.csv", sep=";")
+df <- base_em2
+```
+
+Vamos começar avaliando a importação da base. Se foi feita corretamente.
+
+Temos 83550 observações em 25 variáveis. Ao verificar a variável ano, percebemos que há exatamente 5570 observações para cada ano, de 2006 até 2019.
+
+```{r}
+#inspeção
+str(df)
+table(df$ano)
+table(df$EM)
+table(df$ano_EM)
+```
+
+Ao avaliar as tipagens, temos que converter variáveis qualitativas de chr, int e num para vetor, incluindo os levels.
+
+```{r}
+# Recodificação em vetor das variáveis qualitativas
+df <- df %>%
+  mutate(
+    uf = as.factor(uf),
+    cod_uf = as.factor(cod_uf),
+    cap = factor(cap, levels = c(0, 1), labels = c("Não é Capital", "É Capital")),
+    EM = factor(EM, levels = c(0, 1), labels = c("Não", "Sim")),
+    ano_EM = factor(ano_EM, levels = c(0, 2017, 2018, 2019), labels = c("Não há escola", "2017", "2018", "2019")),
+    ano = as.factor(ano)
+  )
+
+# Recodificação de variáveis quantitativas (população)
+df <- df %>%
+  mutate(
+    pop = as.numeric(pop)
+  )
+```
+
+A recodificação de latitude e longitude precisou remover espaços, pois a indicação de decimal foi importada com estes espaços. Removendo os espaços, ficamos com um número de 6 digitos, sendo que precisamos do separador decimal após o digito 2. Por isso, dividimos por 10000.
+
+No entanto ao recodificar, foi verificado que os dados estão corrompidos. Alguns municípios, ao dividir por 10000, na verdade teria que dividir por 100000, ainda que o número de digitos fosse igual ao que funcionou dividindo por 10000. Diante disso, obtivemos latitude e longitude oficiais do IBGE para substituir estes vetores.
+
+```{r}
+library(readxl)
+coords <- read_excel("coords.xls")
+# 1 Convertendo tipos
+coords <- coords %>%
+  mutate(across(c(ibge, lat, lon), ~ as.numeric(gsub(",", ".", .x))))
+
+# 2. Substituição segura mantendo a ordem original
+df_corrigido <- df %>%
+  select(-any_of(c("latitude", "longitude"))) %>%
+  left_join(coords %>% select(ibge, lat, lon), by = "ibge") %>%
+  rename(latitude = lat, longitude = lon)
+```
+
+Feitas as recodificações, podemos realizar outras inspeções na base, pedindo tabelas cruzadas. Agora vamos tratar outliers e dados ausentes, que podem influenciar nos resultados das técnicas inferenciais.
+
+```{r}
+# Sumarizar as somas de NAs e guardar em uma tabela
+
+missing_data_summary_by_EM <- df_corrigido %>%
+  group_by(EM) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(-EM, names_to = "variavel", values_to = "n_ausentes") %>%
+  left_join(df %>% group_by(EM) %>% summarise(total_linhas_grupo = n()), by = "EM") %>%
+  mutate(
+    porcentagem_ausentes = (n_ausentes / total_linhas_grupo) * 100
+  ) %>%
+  arrange(EM, desc(n_ausentes))
+missing_data_summary_by_EM
+```
+
+Tomando como premissa que devemos salvaguardar os dados dos 37 municípios com escolas médias + a incidência baixa de NAs. Identificamos que há NAs apenas 2 variáveis nos municípios de tratamento: Quantidade de equipes de saúde (qes = 7,14%) e Percentual de cobertura da atenção básica (cab = 7,14%). Ao observar a base, verificamos que se trata dos dados referente ao ano de 2006. Decidimos continuar pois não seria coerente substituir os dados pela mediana da série histórica. Os demais dados ausentes ocorrem ao longo de outras variáveis, mas sem afetar substancialmente a continuidade da análise.
+
+Vamos avaliar os outliers. Os dados extremos podem dificultar a qualidade do pareamento, sendo possível gerar pares desbalanceados, principalmente se o outlier está no grupo menor, no caso, ser um dos municípios tratados.
+
+Uma técnica que limita o enviesamento dos outliers é a winsorização. Vamos calcular os limites para que cada observação seja classifica como outliers, para em seguida forçar arbitrariamente a observação até o limite em que é considerada típica. Assim, ainda que os dados sejam reais, continuamos utilizando-os sem comprometer as análises inferenciais. Para ser prudente, vamos considerar os limites por 3 desvios padronizados em módulo.
+
+```{r}
+winsorize_cols <- df_corrigido %>%
+  select(norg:ifdmer) %>% # Seleciona de 'norg' até a última coluna
+  select(where(is.numeric)) %>% # Filtra apenas as que são numéricas dentro dessa seleção
+  names()
+
+# Aplica Winsorização usando `mutate(across())` com o critério de 3 desvios padrão
+df2 <- df_corrigido %>%
+  mutate(across(all_of(winsorize_cols), ~{
+    # Remove NAs para o cálculo da média e desvio padrão
+    x_no_na <- .[!is.na(.)]
+    if (length(x_no_na) < 2 || var(x_no_na) == 0) { # Lida com vetores muito curtos ou sem variância
+      return(.)
+    }
+    
+    # Calcula média e desvio padrão
+    mean_val <- mean(x_no_na, na.rm = TRUE)
+    sd_val <- sd(x_no_na, na.rm = TRUE)
+    
+    # Define os limites de 3 desvios padrão
+    lower_bound <- mean_val - 3 * sd_val
+    upper_bound <- mean_val + 3 * sd_val
+    
+    # Aplica a winsorização: valores fora dos limites são substituídos pelos limites
+    # Caso contrário, o valor original é mantido.
+    case_when(
+      . < lower_bound ~ lower_bound,
+      . > upper_bound ~ upper_bound,
+      TRUE ~ . # Mantém o valor original se estiver dentro dos limites
+    )
+  }))
+```
+
+Agora vamos padronizar as variáveis pela distribuição Normal. Como vamos utilizar técnicas inferenciais que são sensíveis a amplitude das variáveis, devemos deixa-las na mesma escala. A padronização pela Normal é um procedimento adequado. Vamos guardar em novas variáveis, mantendo as variáveis em escalas original para resultados descritivos.
+
+```{r}
+# Padronização pela Normal
+
+# Seleção de variáveis
+standardize_cols <- df2 %>%
+  select(where(is.numeric)) %>% 
+  select(-c(ibge, ibge6)) %>% #Exclui 'Ibge' e 'Ibge6'
+  names()
+
+# Criação das variáveis z
+df3 <- df2 %>%
+  mutate(across(all_of(standardize_cols), ~{
+    # Se o desvio padrão for zero ou o vetor for muito curto, retorna o valor original (ou 0 se padronizado)
+    # Isso evita erros de divisão por zero ou cálculos inválidos
+    if (sd(., na.rm = TRUE) == 0 || length(.[!is.na(.)]) < 2) {
+      return(0) 
+    }
+    scale(.)
+  }, .names = "{.col}_z"))
+```
+
+Agora vamos exportar a base tratada para prosseguir com a análise.
+
+df3 é a base importada com tratamento básico de outliers e dados ausentes, com a decisão de manter os dados de 2006.
+
+```{r}
+# Exportar com separador ;
+#write.csv2(df3, "df3.csv")
+```

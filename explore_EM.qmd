@@ -1,0 +1,376 @@
+---
+title: "Explore_EM"
+author: "Fernando Lhamas"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+df5p <- read.csv2("~/Documents/Escolas_medicas/df5p.csv", stringsAsFactors=TRUE)
+```
+
+Vamos importar a base tratada df5p. A partir desse arquivo, a análise pode ser feita de forma iterativa com a regressão. Se o interesse for verificar apenas o resultado da Análise 1, basta rodar o script do toópico de Análise 1 e em seguida conduzir a Regressão correspondente.
+
+### Análise 1: PIB per capita
+
+Na primeira verificação já conhecemos em tabela, se trata da região de suporte comum, que é baixa, pois temos 37 municípios x 14 anos tratados, somando 518 de um universo muito maior de municípios.
+
+```{r}
+df5p %>%
+  ggplot(aes(x = EM, y = pib_pc, fill = EM)) +
+  geom_col(stat = "summary", fun = "mean", show.legend = FALSE, width = 0.5) + # Plota a média como altura da barra
+  geom_errorbar(stat = "summary", fun.data = "mean_se", width = 0.2, size = 0.5) + # Adiciona barras de erro (erro padrão da média)
+  labs(
+    title = "Média do PIB Municipal Per Capita por Presença de Escola Médica",
+    x = "Presença de Escola Médica",
+    y = "PIB Municipal Per Capita (R$)"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) # Ajusta título e rótulos do eixo X
+```
+
+Vamos verificar graficamente como se dá o comportamento da variável dependente ao longo dos grupos de tratamento e controle.
+
+```{r}
+# Calcular a média do PIB per capita por ano e grupo
+df_tendencias <- df5p %>%
+  group_by(ano, EM) %>%
+  na.omit(EM) %>% #Remover gráfico com NA
+  summarise(
+    pib_percapita_medio = mean(pib_pc, na.rm = TRUE),
+    .groups = 'drop' # Remover o agrupamento após summarising
+  ) %>%
+  ggplot(aes(x = ano, y = pib_percapita_medio, color = EM, group = EM)) +
+  geom_line(size = 1) +
+  scale_x_continuous(breaks = seq(min(df5p$ano), max(df5p$ano), by = 2))+
+  labs(
+    title = "Tendência do PIB Municipal Per Capita Médio por Ano e Presença de Escola Médica",
+    x = "Ano",
+    y = "PIB Municipal Per Capita Médio (R$)",
+    color = "Escola Médica"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "bottom")
+df_tendencias
+```
+
+Há uma tendência de crescimento nos dois grupos. O resultado mais interessante é que provavelmente há um viés de seleção na condução da política, pois o PIB dos tratados parte de uma média muito maior do que a média nacional, e agora com os dados pareados temos grupos mais homogêneos para comparar, reduzindo substancialmente o viés de seleção da política. Vamos verificar um teste t para comparar as médias.
+
+```{r}
+# teste t PIB per capita e EM
+t.test(pib_pc ~ EM, data = df5p, var.equal = FALSE, na.action = na.omit)
+
+
+```
+
+A média do grupo Não obtida foi de 28.68 e a do grupo Sim foi de 26.25. A diferença é estatisticamente significativa, com t = 2.548, p-value = 0.011. O resultado indica que vale a pena continuar investigando a relação entre as duas variáveis, principalmente pelo intervalo de confiança não cruzar o 0.
+
+## Análise 2: Crescimento das organizações
+
+### Análise de componentes principais
+
+A partir da segunda análise vamos construir um indicador baseado no score de componente principal das variáveis relacionado ao crescimento do número de organizações geral (norg), organizações de transporte, armazenagem e correio (norg_tac), organizações de alojamento e alimentação (norg_aa) e organizações de artes, cultura, esporte e recreação (norg_acer).
+
+```{r}
+#ACP
+acp1 <- df5p %>%
+  select(norg_z, norg_aa_z, norg_tac_z, norg_acer_z) %>%
+  na.omit()
+
+#Rodar a ACP
+acp_norg <- stats::prcomp(acp1, center = TRUE, scale.= TRUE)
+summary(acp_norg)
+acp_norg$rotation
+```
+
+A variável geral explicou 73.3% de toda a variância, sugerindo pelo critério de Kaiser a unidimensionalidade. As cargas fatoriais não são altas, sugerindo que há baixa capacidade da dimensão única representar bem as variáveis. Nestes casos, é preferivel prosseguir com a variável geral norg para análises subsequentes.
+
+Vamos verificar graficamente a relação entre a dependente e a independente.
+
+```{r}
+# Calcular a média norg por ano e grupo
+df_tendencias2 <- df5p %>%
+  group_by(ano, EM) %>%
+  na.omit(EM) %>% #Remover gráfico com NA
+  summarise(
+    norg_medio = mean(norg, na.rm = TRUE),
+    .groups = 'drop' # Remover o agrupamento após summarising
+  ) %>%
+  ggplot(aes(x = ano, y = norg_medio, color = EM, group = EM)) +
+  geom_line(size = 1) +
+  scale_x_continuous(breaks = seq(min(df5p$ano), max(df5p$ano), by = 2))+
+  labs(
+    title = "Tendência do número médio de organizações por Ano e Presença de Escola Médica",
+    x = "Ano",
+    y = "Número de Organizações Médio",
+    color = "Escola Médica"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "bottom")
+df_tendencias2
+```
+
+Aparentemente, os comportamentos das variáveis são semelhantes. O que é um resultado esperado. Vamos ver no teste.
+
+```{r}
+# teste t norg e EM
+t.test(norg_z ~ EM, data = df5p, var.equal = FALSE, na.action = na.omit)
+```
+
+No teste com os dados padronizados, encontramos significância na diferença de média entre os grupos, demonstrando que as médias no grupo de tratados são significativamente maiores (t = -2.08, p = 0.037. Esse resultado indica que devemos continuar investigando.
+
+## Análise 3: Pessoas ocupadas
+
+### Análise de componentes principais
+
+Vamos construir o indicador de componentes principais para ocupação, que envolve pessoal ocupado total (pot), pessoal ocupado assalariado(poa) e população residente estimada (pre).
+
+```{r}
+#ACP
+acp2 <- df5p %>%
+  select(pot_z, poa_z, pre_z) %>%
+  na.omit()
+
+#Rodar a ACP
+acp_por <- stats::prcomp(acp2, center = TRUE, scale.= TRUE)
+summary(acp_por)
+acp_por$rotation
+```
+
+A proporção de variância de PC1 explica 86.76% da variância total, o que sugere forte unidimensionalidade. O autovalor pode ser obtido pelo desvio-padrão ao quadrado, chegando a 1.61² = 2.592, o que é praticamente o máximo possível para três variáveis padronizadas. Quanto aos pesos, as três contribuem positivamente, o que é considerado ideal para formar um índice. As correlações sendo fortes e positivas corroboram o uso de um índice único representando as variáveis.
+
+```{r}
+# Extrair os scores do primeiro componente
+# Score de pessoas ocupadas e residentes
+df5p$s_por <- acp_por$x[,"PC1"]
+
+# Se você precisar incluir os casos com NA posteriormente:
+# Primeiro crie uma coluna temporária com NAs
+df5p$s_por <- NA
+
+# Depois preencha com os scores onde há dados completos
+df5p[complete.cases(df5p[, c("pot_z", "poa_z", "pre_z")]), "s_por"] <- acp_por$x[,"PC1"]
+plot(acp_por, type = "l")
+cor(acp2)
+```
+
+```{r}
+# Calcular a média por por ano e grupo
+df_tendencias3 <- df5p %>%
+  group_by(ano, EM) %>%
+  na.omit(EM) %>% #Remover gráfico com NA
+  summarise(
+    s_por_medio = mean(s_por, na.rm = TRUE),
+    .groups = 'drop' # Remover o agrupamento após summarising
+  ) %>%
+  ggplot(aes(x = ano, y = s_por_medio, color = EM, group = EM)) +
+  geom_line(size = 1) +
+  scale_x_continuous(breaks = seq(min(df5p$ano), max(df5p$ano), by = 2))+
+  labs(
+    title = "Tendência de pessoas ocupadas e residentes por ano e Presença de Escola Médica",
+    x = "Ano",
+    y = "Número de pessoas ocupadas e residentes",
+    color = "Escola Médica"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "bottom")
+df_tendencias3
+```
+
+## Análise 4: Índice FIRJAN de desenvolvimento municipal
+
+### Análise de componentes principais
+
+Vamos construir o indicador de componentes principais para as variáveis do FIRJAN (idfm) que envolve o índice geral (ifdmg), para educação (ifdme), para saúde (ifdms) e para emprego e renda (ifdmer).
+
+```{r}
+#ACP
+acp3 <- df5p %>%
+  select(ifdmg_z, ifdme_z, ifdms_z, ifdmer_z) %>%
+  na.omit()
+
+#Rodar a ACP
+acp_ifdm <- stats::prcomp(acp3, center = TRUE, scale.= TRUE)
+summary(acp_ifdm)
+acp_ifdm$rotation
+plot(acp_ifdm, type = "l")
+cor(acp3)
+```
+
+A proporção de variância de PC1 explica 70.1% da variância total, o que sugere forte unidimensionalidade. O autovalor pode ser obtido pelo desvio-padrão ao quadrado, chegando a 1.67² = 2.78, o que é considerado alto para quatro variáveis padronizadas. Quanto aos pesos, as três primeiras contribuem forte e positivamente para a dimensão, o que é considerado ideal para formar um índice. As correlações sendo fortes e positivas corroboram o uso de um índice único representando as variáveis. A única variável dissonante é o FIRJAN de Emprego e Renda, que obteve peso abaixo do considerado ideal e nutre correlações fracas com as demais variáveis.
+
+```{r}
+# Extrair os scores do primeiro componente
+#Rodar a ACP
+acp3 <- df5p %>%
+  select(ifdmg_z, ifdme_z, ifdms_z) %>%
+  na.omit()
+acp_ifdm <- stats::prcomp(acp3, center = TRUE, scale.= TRUE)
+
+# Score de pessoas ocupadas e residentes
+df5p$s_ifdm <- acp_ifdm$x[,"PC1"]
+
+# Se você precisar incluir os casos com NA posteriormente:
+# Primeiro crie uma coluna temporária com NAs
+df5p$s_ifdm <- NA
+
+# Depois preencha com os scores onde há dados completos
+df5p[complete.cases(df5p[, c("ifdmg_z", "ifdme_z", "ifdms_z")]), "s_ifdm"] <- acp_ifdm$x[,"PC1"]
+
+```
+
+```{r}
+# Calcular a média por por ano e grupo
+df_tendencias4 <- df5p %>%
+  group_by(ano, EM) %>%
+  na.omit(EM) %>% #Remover gráfico com NA
+  summarise(
+    s_ifdm_medio = mean(s_ifdm, na.rm = TRUE),
+    .groups = 'drop' # Remover o agrupamento após summarising
+  ) %>%
+  ggplot(aes(x = ano, y = s_ifdm_medio, color = EM, group = EM)) +
+  geom_line(size = 1) +
+  scale_x_continuous(breaks = seq(min(df5p$ano), max(df5p$ano), by = 2))+
+  labs(
+    title = "Tendência de Índice FIRJAN por ano e Presença de Escola Médica",
+    x = "Ano",
+    y = "Índice FIRJAN",
+    color = "Escola Médica"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "bottom")
+df_tendencias4
+```
+
+## Análise 5: Indicadores de saúde
+
+### Análise de componentes principais
+
+Vamos construir o indicador de componentes principais para as variáveis relacionadas a área da saúde do município, sendo elas: Número de estabelecimentos de saúde (ns), quantidade de médicos (qm), quantidade de equipes de saúde (qes) e percentual de cobertura de atenção básica (cab)
+
+```{r}
+#ACP
+acp4 <- df5p %>%
+  select(ns_z, qm_z, qes_z, cab_z) %>%
+  na.omit()
+
+#Rodar a ACP
+acp_sau <- stats::prcomp(acp4, center = TRUE, scale.= TRUE)
+summary(acp_sau)
+acp_sau$rotation
+plot(acp_sau, type = "l")
+acp4cor <- cor(acp4)
+# Gráfico de correlação
+corrplot::corrplot(acp4cor)
+```
+
+A proporção de variância de PC1 explica 55.3% da variância total, o que sugere que há unidimensionalidade, pois fica acima de 50%. No entanto, é um resultado próximo do limite. Ao observamos de forma complementar a matriz de correlações, percebemos que há correlações fracas, moderadas e fortes. Quanto aos pesos, as três primeiras contribuem de forma moderada, ainda que todas sejam positivas. Estes resultados sugerem que o score de unidimensionalidade não é a melhor solução, sendo preferivel utilizar cada variável de saúde como dependente.
+
+Vamos verificar os gráficos de tendência para cada variável
+
+```{r}
+# Calcular a média por por ano e grupo
+df_tendencias5 <- df5p %>%
+  group_by(ano, EM) %>%
+  na.omit(EM) %>% #Remover gráfico com NA
+  summarise(
+    ns_medio = mean(ns, na.rm = TRUE),
+    .groups = 'drop' # Remover o agrupamento após summarising
+  ) %>%
+  ggplot(aes(x = ano, y = ns_medio, color = EM, group = EM)) +
+  geom_line(size = 1) +
+  scale_x_continuous(breaks = seq(min(df5p$ano), max(df5p$ano), by = 2))+
+  labs(
+    title = "Número de estabelecimentos de saúde por ano e Presença de Escola Médica",
+    x = "Ano",
+    y = "Estabelecimentos de saúde",
+    color = "Escola Médica"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "bottom")
+df_tendencias5
+```
+
+```{r}
+# Calcular a média por por ano e grupo
+df_tendencias6 <- df5p %>%
+  group_by(ano, EM) %>%
+  na.omit(EM) %>% #Remover gráfico com NA
+  summarise(
+    qes_medio = mean(qes, na.rm = TRUE),
+    .groups = 'drop' # Remover o agrupamento após summarising
+  ) %>%
+  ggplot(aes(x = ano, y = qes_medio, color = EM, group = EM)) +
+  geom_line(size = 1) +
+  scale_x_continuous(breaks = seq(min(df5p$ano), max(df5p$ano), by = 2))+
+  labs(
+    title = "Quantidade de equipes de saúde por ano e Presença de Escola Médica",
+    x = "Ano",
+    y = "Equipes de saúde",
+    color = "Escola Médica"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "bottom")
+df_tendencias6
+```
+
+```{r}
+# Calcular a média por por ano e grupo
+df_tendencias7 <- df5p %>%
+  group_by(ano, EM) %>%
+  na.omit(EM) %>% #Remover gráfico com NA
+  summarise(
+    cab_medio = mean(cab, na.rm = TRUE),
+    .groups = 'drop' # Remover o agrupamento após summarising
+  ) %>%
+  ggplot(aes(x = ano, y = cab_medio, color = EM, group = EM)) +
+  geom_line(size = 1) +
+  scale_x_continuous(breaks = seq(min(df5p$ano), max(df5p$ano), by = 2))+
+  labs(
+    title = "Cobertura de atenção básica(%) por ano e Presença de Escola Médica",
+    x = "Ano",
+    y = "Cobertura de atenção básica (%)",
+    color = "Escola Médica"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "bottom")
+df_tendencias7
+```
+
+```{r}
+# Calcular a média por por ano e grupo
+df_tendencias8 <- df5p %>%
+  group_by(ano, EM) %>%
+  na.omit(EM) %>% #Remover gráfico com NA
+  summarise(
+    qm_medio = mean(qm, na.rm = TRUE),
+    .groups = 'drop' # Remover o agrupamento após summarising
+  ) %>%
+  ggplot(aes(x = ano, y = qm_medio, color = EM, group = EM)) +
+  geom_line(size = 1) +
+  scale_x_continuous(breaks = seq(min(df5p$ano), max(df5p$ano), by = 2))+
+  labs(
+    title = "Quantidade de médicos por ano e Presença de Escola Médica",
+    x = "Ano",
+    y = "Quantidade de médicos",
+    color = "Escola Médica"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "bottom")
+df_tendencias8
+```
+
+```{r}
+# Exportar com separador ;
+write.csv2(df5p, "df5p.csv")
+```

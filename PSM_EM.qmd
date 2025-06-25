@@ -1,0 +1,94 @@
+---
+title: "PSM_EM"
+author: "Fernando Lhamas"
+format: html
+editor: visual
+---
+
+## PSM
+
+Precisamos rodar um pareamento, pois há viés de seleção na política. Como os grupos partem de médias das variáveis dependentes muito desiguais entre os grupos, isso pode comprometer os resultados.
+
+```{r}
+library(MatchIt) # para o PSM
+library(tidyverse)
+library(effectsize) #Para avaliar magnitude dos testes
+df5 <- read.csv2("~/Documents/Escolas_medicas/df5.csv", stringsAsFactors=TRUE)
+```
+
+### Estimativa dos propensity scores
+
+```{r}
+dfpsm <- df5 %>%
+  filter(ano != 2017 & ano != 2018 & ano != 2019) %>%
+  na.omit()
+m_ps <- glm(EM ~  pop_z + pib_pc, family = binomial(), data = dfpsm)
+summary(m_ps)
+```
+
+Os resultados mostram que vamos manter a população. Agora vamos gerar o modelo, observando que temos que gerar as médias dos anos pré-tratamento para grupos de tratados e não tratados.
+
+```{r}
+dfpsm <- dfpsm %>%
+  group_by(ibge) %>%
+  summarise(
+    pop_z_pre = mean(pop_z, na.rm = TRUE),  
+    pib_z_pre = mean(pib_z, na.rm =TRUE),
+    norg_z_pre = mean(norg_z, na.rm = TRUE),
+    ifdmg_z_pre = mean(ifdmg_z, na.rm = TRUE),
+    pot_z_pre = mean(pot_z, na.rm = TRUE),
+    EM_treated = max(ifelse(any(EM == "Sim"), 1, 0)))
+```
+
+Agora vamos realizar o pareamento.
+
+```{r}
+matching <- matchit(
+  EM_treated ~ pop_z_pre + norg_z_pre + pib_z_pre + pot_z_pre,
+  data = dfpsm,
+  method = "genetic",
+  ratio = 5, # 5 grupos de controle
+  caliper = .45 # Até 0.2 de diferença de desvio para parear
+)
+```
+
+As variáveis retiradas estavam dificultando encontrar os pares ou gerando confusão nos índices de qualidade do pareamento. Vamos verificar o poder estatístico para saber se os dados pareados são ideais
+
+```{r}
+# a priori
+pwr::pwr.t2n.test(n1 = 37, power = .8, d = .6, sig.level = .05)
+# a priori ideal
+pwr::pwr.t2n.test(n1 = 37, power = .95, d = .6, sig.level = .05)
+# a posteriori
+pwr::pwr.t2n.test(n1 = 37, n2 = 185, d = .6, sig.level = .05)
+# Após verificar os pareados = 36
+pwr::pwr.t2n.test(n1 = 29, n2 = 145, d = .6, sig.level = .05)
+```
+
+De acordo com os resultados a priori, precisamos de 56 observações no grupo 2 (controle) para alcançar poder estatístico mínimo desejado (80% e 20% de chance ocorrer erro do tipo 2). No entanto, ao avaliar grupos desiguais, o incremento de poder estatístico exige uma amostra cada vez maior, chegando a 1555 para obter poder ideal de 0.95. Por isso, ajustamos o pareamento para 5 conjuntos de 37 municípios como controle e ajustamos de forma conservadora o caliper (número limite de desvios para parear), para ter municípios pareados mais próximos. No entanto, obtivemos convergência apenas pareando 29 observações do grupo tratado com 145 no grupo de controle. Ainda assim, o poder estatístico mínimo foi alcançado, sendo 0.83.
+
+Vamos verificar os resultados do pareamento
+
+```{r}
+dta_m <- match.data(matching)
+dim(dta_m)
+summary(matching)
+```
+
+Verificamos que o pareamento foi realizado. Antes do pareamento, a diferença de população entre os tratados e não tratados era bem desbalanceada (eCDFm MAX = 0.94. Após o matching, o balanceamento foi obtido (eCDF MAX = 0.186 e com diferença de média próxima de 0. O ratio ficou entre 0.4 e 1.32 para as variáveis restantes, indicando excelente ajustamento.
+
+Vamos gerar a base de dados pareada
+
+```{r}
+# Identificar código ibge dos municípios pareados
+matched_ids <- unique(dta_m$ibge)
+df5p <- df5 %>%
+  filter(ibge %in% matched_ids)
+```
+
+Obtemos os dados pareados com 2436 observações, sendo 174 municípios \* 14 anos = 2436 linhas
+
+```{r}
+# Exportar base de dados pareada
+write.csv2(df5p, "df5p.csv")
+```

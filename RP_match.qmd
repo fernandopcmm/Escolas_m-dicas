@@ -1,0 +1,72 @@
+---
+title: "RP_match_EM"
+author: "Fernando Lhamas"
+format: html
+editor: visual
+---
+
+## Regressão em painel
+
+```{r}
+library(tidyverse)
+library(systemfit)
+df5p <- read.csv2("~/Documents/Escolas_medicas/df5p.csv", stringsAsFactors=TRUE)
+```
+
+## Análise SUR
+
+```{r}
+# Selecionar apenas as colunas necessárias e remover NAs
+df5p <- df5p %>%
+  mutate(
+    ano = as.numeric(as.character(ano)),
+    EM_treated = ifelse(EM == "Sim" & ano >= 2017, 1, 0)
+  )
+df_sur <- df5p %>%
+  select(ibge, ano, EM_treated, pib_pc1000, norg, s_por, s_ifdm, ifdms, ns, qm, qes, cab) %>%
+  na.omit()
+```
+
+Lista de equações
+
+```{r}
+eq_pib    <- pib_pc1000 ~ EM_treated
+eq_norg   <- norg ~ EM_treated
+eq_spor   <- s_por ~ EM_treated
+eq_sifdm  <- s_ifdm ~ EM_treated
+eq_ifdms  <- ifdms ~ EM_treated
+eq_ns     <- ns ~ EM_treated
+eq_qm     <- qm ~ EM_treated
+eq_qes     <- qes ~ EM_treated
+eq_cab     <- cab ~ EM_treated
+eq_list <- list(eq_pib, eq_norg, eq_spor, eq_sifdm, eq_ifdms, eq_ns, eq_qm, eq_qes, eq_cab)
+```
+
+Modelo
+
+```{r}
+# Rodar o SUR (método OLS)
+modelo_sur <- systemfit(eq_list, method = "SUR", data = df_sur)
+
+# Resumo dos resultados
+summary(modelo_sur)
+```
+
+```{r}
+surcor <- cor(df_sur)
+corrplot::corrplot(surcor)
+```
+
+## Quadro Resumo do Impacto das Escolas Médicas (Modelo SUR)
+
+| Variável Dependente (VD) | Correlação Resíduos (moderada ou alta) | p-valor Painel Individual | Coeficiente `EM_treated` (SUR) | p-valor (SUR) (`Pr(>|t|)`) | Status do Impacto de Curto Prazo | Interpretação da Magnitude (aprox.) |
+|:----------|:----------|:----------|:----------|:----------|:----------|:----------|
+| **PIB per capita** (pib_pc1000) | NÃO | p \> 0.05 | $+7100.98$ | $0.0049$ (\*\*\*) | **Impacto Positivo** | Aumento de R\$ 7.101 no PIB per capita (cerca de 24.5% do valor do intercepto). |
+| **PCA No. Organizações** (norg) | SIM (com s_por, ns, qm) | p \> 0.05 | $+204.38$ | $0.3480$ | **Não Gera Impacto** | Aumento de 204 unidades no índice, mas não é estatisticamente significativo. |
+| **PCA Taxa Ocup./Res.** (s_por) | SIM (com norg, qm, qes) | p \<= 0.05 | $+0.09$ | $0.6034$ | **Não Gera Impacto** | Aumento de 0.09 unidades no índice, mas não é estatisticamente significativo. |
+| **PCA FIRJAN Geral** (s_ifdm) | SIM (com ifdms) | p \> 0.05 | $-1.93$ | $<2.22e-16$ (\*\*\*) | **Inconclusivo (Cenário)** | Redução de 1.93 unidades no índice geral FIRJAN. |
+| **FIRJAN de Saúde** (ifdms) | SIM (com s_ifdm) | p \<= 0.05 | $-0.14$ | $<2.22e-16$ (\*\*\*) | **Inconclusivo (Cenário)** | Redução de 0.14 unidades no índice FIRJAN de Saúde. |
+| **No. Estabelecimentos Saúde** (ns) | SIM (com norg, qm) | p \<= 0.1 | $+119.13$ | $<2.97e-11$ (\*\*\*) | **Impacto Positivo** | Aumento de 119 estabelecimentos de saúde. |
+| **Quantidade de Médicos** (qm) | SIM (com norg, s_por, ns, qes) | p \> 0.05 | $+93.81$ | $<8.04e-05$ (\*\*\*) | **Impacto Positivo** | Aumento de 94 médicos. |
+| **Quantidade Equipes Saúde** (qes) | SIM (com s_por, qm) | p \> 0.05 | $+10.84$ | $<1.42e-06$ (\*\*\*) | **Impacto Positivo** | Aumento de 11 equipes de saúde. |
+| **Cobertura Atenção Básica** (cab) | SIM (com qes) | p \> 0.05 | $+10.71$ | $<3.42e-06$ (\*\*\*) | **Impacto Positivo** | Aumento de 10.7 pontos percentuais na cobertura de atenção básica. |

@@ -1,0 +1,321 @@
+---
+title: "RP - Escolas Médicas"
+author: "Fernando Lhamas"
+format: html
+editor: visual
+---
+
+## Regressão em painel
+
+```{r}
+library(tidyverse)
+df5p <- read.csv2("~/Documents/Escolas_medicas/df5p.csv", stringsAsFactors=TRUE)
+```
+
+## Análise 1: PIB per capita
+
+Vamos analisar os dados (df5p.csv) sobre o efeito no desenvolvimento econômico, especificamente no PIB per capita, nos municípios que receberam uma escola médica
+
+Vamos seguir o passo-a-passo da regressão para realizar a análise.
+
+```{r}
+df5p %>%
+  group_by(EM) %>%
+  summarise(n_mun = n(),
+            media = mean(pib_pc_z),
+            erro_padrao = sd(pib_pc_z)/sqrt(n_mun))
+```
+
+Percebemos que os municípios que receberam escolas médicas tiveram PIB per capita menor do que os municípios que não receberam. Os resultados não padronizados já foram visualizados em fase exploratória anterior.
+
+Modelo de regressão
+
+No modelo de regressão precisamos de uma variável que indique o início da intervenção. As Escolas Médicas começaram a ser inauguradas em 2017. Temos dados até 2019, mas por decisão dos pesquisadores, há lastro da literatura para sugerir que o efeito já pode ser percebido nos municípios antes mesmo da implementação das EMs. Portanto, compreendemos que o intercepto da política pode ser fixado em 2017 para todos os tratados. Criamos então a variável EM_treated que indica os anos em que a intervenção ocorreu.
+
+Primeiro, vamos ajustar a escala da variável, que está na base (R\$ 1.00), e vamos multiplicar por R\$ 1.000,00
+
+```{r}
+df5p <- df5p %>%
+  mutate(pib_pc1000 = pib_pc*1000)
+df5p %>%
+  group_by(EM) %>%
+  summarise(media = mean(pib_pc1000), sd = sd(pib_pc1000))
+```
+
+```{r}
+library(fixest) # Pacote eficiente para modelos com efeitos fixos
+# Remover NAs antes da análise
+df5_clean <- df5p %>% 
+  drop_na(pib_pc1000, norg, norg_z, s_por, s_ifdm, ns, qm, qes, cab, EM, pop_z, ibge, ano)
+
+# Variável de tratamento, considerando 2017 para os 37 municípios
+df6 <- df5_clean %>%
+  mutate(
+    ano = as.numeric(as.character(ano)),
+    EM_treated = ifelse(EM == "Sim" & ano >= 2017, 1, 0)
+  )
+# Devemos ter 87 linhas tratadas, sendo 29 x 3 anos
+table(df6$EM_treated)
+
+#Estimando o modelo
+modelo <- feols(pib_pc1000 ~ EM_treated 
+                | ibge + ano,
+                data = df6, 
+                cluster = ~ibge)
+summary(modelo)
+```
+
+O modelo rodou e não obteve significância estatística, indicando que não há efeito no PIB per capita a partir da política. Vamos verificar as tendências paralelas.
+
+```{r}
+df6 %>%
+  group_by(EM, ano) %>%
+  summarise(pib_medio = mean(pib_pc, na.rm = TRUE)) %>%
+  ggplot(aes(ano, pib_medio, color = factor(EM))) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(xintercept = 2017, linetype = "dashed", color = "red") +
+  scale_x_continuous(breaks = seq(min(df6$ano), max(df6$ano), by = 2))+
+  labs(title = "Trajetória do PIB per capita antes/depois do tratamento")+
+  scale_color_manual(values = c("Não" = "#1f77b4", "Sim" = "#ff7f0e"), 
+                     labels = c("Não tratados", "Tratados")) +
+  labs(title = "Trajetória do PIB per capita antes/depois do tratamento",
+    x = "Ano", y = "PIB per capita médio (R$)", color = "") +
+  theme_minimal()
+```
+
+O resultado indica que não há efeito médio de PIB per capita após a intervenção. Ainda que haja tendência de crescimento, ele acontece em ambos os grupos e portanto, não porde ser explicado pela adoção da política analisada. Sugere-se que esse efeito posa ser analisado a longo prazo, para então verificar novamente o efeito. Este efeito obtido com o teste é considerada o efeito médio dos tratados pós tratamento.
+
+$$
+ATT = \mathbb{E}[Y_{1,t} - Y_{0,t} \mid D_t = 1]
+$$
+
+Onde:
+
+\- $Y_{1,t}$: PIB per capita dos tratados após a política.
+
+\- $Y_{0,t}$: PIB per capita contrafactual (sem política).
+
+\- $D_t = 1$: Indicador de tratamento (1 para municípios tratados).
+
+Podemos concluir que não há efeito da política no PIB per capita, além do crescimento natural que já teria sem a intervenção. É importante discutir junto a outras informações que se conhece da política, como:
+
+-   Há previsão da política aumentar o PIB per capita da região em seu desenho?
+
+-   Há justificativa teórica e prática para crer que o PIB per capita aumente em curto prazo a partir da implementação das escolas médicas?
+
+-   Existe a hipótese de efeito maior a longo prazo no PIB per capita que justifique continuar avaliando o efeito? Se sim, por quanto tempo?
+
+-   Há alguma variável de confundimento? Variável que pode influenciar o efeito do PIB per capita nos municípios tratados e que não consta na base de dados.
+
+## Análise 2: Número de organizações
+
+Nos resultados exploratórios, verificamos que os grupos diferem quanto ao número de organizações. Vamos avaliar o efeito ao longo do tempo e as diferenças antes e após a implantação das escolas médicas.
+
+```{r}
+# Vamos verificar novamente
+table(df6$EM_treated)
+
+#Estimando o modelo
+modelo <- fepois(norg ~ EM_treated 
+                | ibge + ano,
+                data = df6, 
+                cluster = ~ibge)
+summary(modelo)
+```
+
+De acordo com os resultados não há efeito no número de organizações. A estimativa obtida foi de aproximadamente 0, com p-valor = 0.10. Dessa forma, a hipótese nula não pode ser rejeitada. O pseudo R² foi ótimo, mas o log-likelihood precisa ser comparado com modelos concorrentes. Vamos testar com a binomial negativa.
+
+```{r}
+#Se variância >> média, melhor testar a binomial negativa
+mean(df6$norg, na.rm=T)
+var(df6$norg, na.rm=T)
+modelo <- fenegbin(norg ~ EM_treated | ibge + ano, data = df6, cluster = ~ibge)
+summary(modelo)
+```
+
+O modelo gerado obteve maior fidedignidade do que o modelo concorrente. No entanto, a estimativa não foi significativa (estimativa de tratados pós-intervenção = -0.02 ou 0.02% a mais no grupo de tratados,com p.value = 0.28). O pseudo R² ajustado foi de 20% de variação para além dos efeitos fixos. Sendo assim, dos modelos concorrentes, o de Poisson gera superdispersão, gerando erros padrão incorretos. A binomial negativa corrige essas falhas e geram resultados fidedignos.
+
+Vamos verificar as tendências paralelas
+
+```{r}
+df6 %>%
+  group_by(EM, ano) %>%
+  summarise(norg_medio = mean(norg, na.rm = TRUE)) %>%
+  ggplot(aes(ano, norg_medio, color = factor(EM))) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(xintercept = 2017, linetype = "dashed", color = "red") +
+  scale_x_continuous(breaks = seq(min(df6$ano), max(df6$ano), by = 2))+
+  labs(title = "Trajetória do número de organizações antes/depois do tratamento")+
+  scale_color_manual(values = c("Não" = "#1f77b4", "Sim" = "#ff7f0e"), 
+                     labels = c("Não tratados", "Tratados")) +
+  labs(title = "Trajetória do número de organizações antes/depois do tratamento",
+    x = "Ano", y = "Número de organizações", color = "") +
+  theme_minimal()
+```
+
+## Análise 3: Número de pessoas ocupadas e residentes
+
+Nos resultados exploratórios, verificamos que os grupos diferem quanto ao número de organizações. Vamos avaliar o efeito ao longo do tempo e as diferenças antes e após a implantação das escolas médicas.
+
+```{r}
+
+# Vamos verificar novamente
+table(df6$EM_treated)
+
+#Estimando o modelo
+modelo <- feols(s_por ~ EM_treated 
+                | ibge + ano,
+                data = df6, 
+                cluster = ~ibge)
+summary(modelo)
+```
+
+De acordo com os resultados há efeito significativo da implantação das escolas médicas sobre o número de pessoas ocupadas e residentes. A estimativa obtida foi de -0.12 scores padronizados com p-valor = 0.005 Dessa forma, a hipótese nula pode ser rejeitada. O R² foi ótimo, sendo de 0.97 ou 97%. O erro padrão do modelo é robusto aos pressupostos de homoscedasticidade e autocorrelação serial. Conclui-se que há um efeito moderado da política na variável dependente.
+
+Vamos verificar as tendências paralelas
+
+```{r}
+df6 %>%
+  group_by(EM, ano) %>%
+  summarise(s_por_medio = mean(s_por, na.rm = TRUE)) %>%
+  ggplot(aes(ano, s_por_medio, color = factor(EM))) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(xintercept = 2017, linetype = "dashed", color = "red") +
+  scale_x_continuous(breaks = seq(min(df6$ano), max(df6$ano), by = 2))+
+  labs(title = "Trajetória do número de pessocas ocupadas e residentes antes/depois do tratamento")+
+  scale_color_manual(values = c("Não" = "#1f77b4", "Sim" = "#ff7f0e"), 
+                     labels = c("Não tratados", "Tratados")) +
+  labs(title = "Trajetória do número pessoas ocupadas e residentes antes/depois do tratamento",
+    x = "Ano", y = "Número de organizações", color = "") +
+  theme_minimal()
+```
+
+## Análise 4: Índice FIRJAN
+
+Vamos avaliar o efeito ao longo do tempo e as diferenças antes e após a implantação das escolas médicas.
+
+```{r}
+
+# Vamos verificar novamente
+table(df6$EM_treated)
+
+#Estimando o modelo
+modelo <- feols(s_ifdm ~ EM_treated 
+                | ibge + ano,
+                data = df6, 
+                cluster = ~ibge)
+summary(modelo)
+```
+
+De acordo com os resultados não há efeito significativo da implantação das escolas médicas sobre o Índice FIRJAN. A estimativa obtida foi de 0.17 scores padronizados com p-valor = 0.22. Dessa forma, a hipótese nula não pode ser rejeitada. O R² foi ótimo, mas o log-likelihood precisa ser comparado com modelos concorrentes. Conclui-se que a curto prazo, não há efeito da política na variável dependente.
+
+Vamos verificar as tendências paralelas
+
+```{r}
+df6 %>%
+  group_by(EM, ano) %>%
+  summarise(s_ifdm_medio = mean(s_ifdm, na.rm = TRUE)) %>%
+  ggplot(aes(ano, s_ifdm_medio, color = factor(EM))) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(xintercept = 2017, linetype = "dashed", color = "red") +
+  scale_x_continuous(breaks = seq(min(df6$ano), max(df6$ano), by = 2))+
+  labs(title = "Trajetória do Índice FIRJAN antes/depois do tratamento")+
+  scale_color_manual(values = c("Não" = "#1f77b4", "Sim" = "#ff7f0e"), 
+                     labels = c("Não tratados", "Tratados")) +
+  labs(title = "Trajetória do Índice FIRJAN antes/depois do tratamento",
+    x = "Ano", y = "Índice FIRJAN", color = "") +
+  theme_minimal()
+```
+
+Uma dúvida que fica ao observar o gráfico é a mudança repentina no FIRJAN em 2017, justamente no ano de início da política. Os fatos ocorridos que justificam essa mudança podem ter afetado a análise de forma substancial. Portanto, é mais prudente destacar que esta análise é inconclusiva.
+
+Ao avaliar o Índice FIRJAN, temos a hipótese de que mesmo havendo unidimensionalidade, é importante verificar se para o FIRJAN específico de Saúde houve algum impacto. Portanto, conduzimos a análise para o indicador ifdms.
+
+```{r}
+modelo <- feols(ifdms_z ~ EM_treated | ibge + ano, data = df6, cluster = ~ibge)
+summary(modelo)
+```
+
+A hipótese nula pode ser rejeitada, indicando que com uma estimativa padronizada de 0.19, t = 1.97 e p = 0.049, há um impacto significativo no Índice FIRJAN de saúde a partir da implementação das escolas médicas. O R² ajustado foi de 86%.
+
+Vamos verificar o gráfico de tendências para esta variável:
+
+```{r}
+df6 %>%
+  group_by(EM, ano) %>%
+  summarise(ifdms_medio = mean(ifdms, na.rm = TRUE)) %>%
+  ggplot(aes(ano, ifdms_medio, color = factor(EM))) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(xintercept = 2017, linetype = "dashed", color = "red") +
+  scale_x_continuous(breaks = seq(min(df6$ano), max(df6$ano), by = 2))+
+  labs(title = "Trajetória do Índice FIRJAN de Saúde antes/depois do tratamento")+
+  scale_color_manual(values = c("Não" = "#1f77b4", "Sim" = "#ff7f0e"), 
+                     labels = c("Não tratados", "Tratados")) +
+  labs(title = "Trajetória do Índice FIRJAN de Saúde antes/depois do tratamento",
+    x = "Ano", y = "Índice FIRJAN de Saúde", color = "") +
+  theme_minimal()
+```
+
+Percebemos claramente que a partir de 2017, o índice para os tratados começou a subir mais do que para os não tratados, chegando a níveis similares em 2018 e ultrapassando em 2019.
+
+## Análise 5: Indicadores de saúde
+
+Vamos avaliar o efeito ao longo do tempo e as diferenças antes e após a implantação das escolas médicas para os indicadores de saúde de forma individual.
+
+```{r}
+#Estimando os modelos
+modelo1 <- fepois(ns ~ EM_treated | ibge + ano, data = df6, cluster = ~ibge)
+summary(modelo1)
+modelo2 <- fepois(qm ~ EM_treated | ibge + ano, data = df6, cluster = ~ibge)
+summary(modelo2)
+modelo3 <- fepois(qes ~ EM_treated | ibge + ano, data = df6, cluster = ~ibge)
+summary(modelo3)
+modelo4 <- feols(cab ~ EM_treated | ibge + ano, data = df6, cluster = ~ibge)
+summary(modelo4)
+```
+
+De acordo com os resultados não há efeito significativo da implantação das escolas médicas sobre os indicadores de saúde. No entanto, é necessário avaliar se o modelo de Poisson é o mais indicado, assim como foi feito na análise 2 do número de organizações.
+
+```{r}
+#Se variância >> média, melhor testar a binomial negativa
+
+# Considerar a binomial negativa
+mean(df6$ns, na.rm=T)
+var(df6$ns, na.rm=T)
+modelo1 <- fenegbin(ns ~ EM_treated | ibge + ano, data = df6, cluster = ~ibge)
+summary(modelo1)
+
+# Manter o modelo de Poisson
+mean(df6$qm, na.rm=T)
+var(df6$qm, na.rm=T)
+
+# Considerar a binomial negativa
+mean(df6$qes, na.rm=T)
+var(df6$qes, na.rm=T)
+modelo3 <- fenegbin(qes ~ EM_treated | ibge + ano, data = df6, cluster = ~ibge)
+summary(modelo3)
+```
+
+Das 4 análises, sendo ns -\> Modelo binomial negativa, qm -\> Modelo de Poisson, qes -\> modelo binomial negativa e cab -\> modelo ols, apenas a ns, relaxando o erro admitido para 10%, coneguimos considerar que há um determinado impacto da implantação das escolas médicas no número de estabelecimentos de saúde.
+
+Vamos verificar as tendências paralelas para o modelo 1 (ns)
+
+```{r}
+df6 %>%
+  group_by(EM, ano) %>%
+  summarise(ns_medio = mean(ns, na.rm = TRUE)) %>%
+  ggplot(aes(ano, ns_medio, color = factor(EM))) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(xintercept = 2017, linetype = "dashed", color = "red") +
+  scale_x_continuous(breaks = seq(min(df6$ano), max(df6$ano), by = 2))+
+  labs(title = "Trajetória do número de estabelecimentos de saúde antes/depois do tratamento")+
+  scale_color_manual(values = c("Não" = "#1f77b4", "Sim" = "#ff7f0e"), 
+                     labels = c("Não tratados", "Tratados")) +
+  labs(title = "Trajetória do número de estabelecimentos de saúde antes/depois do tratamento",
+    x = "Ano", y = "Número de organizações", color = "") +
+  theme_minimal()
+```
+
+Conclusão final
+
+Nas 5 análises realizadas, obtivemos algum grau de impacto com número de pessoas ocupadas e residentes (s_por com p \<= 0.05), o Índice FIRJAN de saúde (ifdms com p \<= 0.05) e o indicador de saúde para o número de estabelecimentos de saúde (ns com p \<= 0,1).
